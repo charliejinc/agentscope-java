@@ -183,6 +183,31 @@ public class E2bSandbox extends AbstractBaseSandbox {
                     platform.connectSandbox(
                             e2bState.getSandboxId(), opt.getSandboxTimeoutSeconds());
             platform.applySandboxFields(e2bState, n);
+            applyDefaultDomain();
+            envd = null;
+            if (!probeSandboxHealthy()) {
+                String id = e2bState.getSandboxId();
+                log.warn(
+                        "[sandbox-e2b] sandbox {} connected but envd health check failed,"
+                                + " recreating",
+                        id);
+                e2bState.setWorkspaceRootReady(false);
+                e2bState.setWorkspaceProjectionHash(null);
+                try {
+                    platform.killSandbox(id);
+                } catch (Exception killEx) {
+                    log.debug(
+                            "[sandbox-e2b] best-effort kill of unhealthy sandbox {}: {}",
+                            id,
+                            killEx.getMessage());
+                }
+                JsonNode n2 =
+                        platform.createSandbox(
+                                e2bState.getTemplateId(), opt.getSandboxTimeoutSeconds());
+                platform.applySandboxFields(e2bState, n2);
+                applyDefaultDomain();
+                envd = null;
+            }
         } catch (Exception e) {
             log.warn("[sandbox-e2b] connect failed, recreating sandbox: {}", e.getMessage());
             e2bState.setWorkspaceRootReady(false);
@@ -191,9 +216,19 @@ public class E2bSandbox extends AbstractBaseSandbox {
                     platform.createSandbox(
                             e2bState.getTemplateId(), opt.getSandboxTimeoutSeconds());
             platform.applySandboxFields(e2bState, n);
+            applyDefaultDomain();
+            envd = null;
         }
-        applyDefaultDomain();
-        envd = null;
+    }
+
+    private boolean probeSandboxHealthy() {
+        try {
+            ExecResult result = envd().runShell(e2bState, getWorkspaceRoot(), "echo ok", 15);
+            return result.ok();
+        } catch (Exception e) {
+            log.debug("[sandbox-e2b] envd health check failed: {}", e.getMessage());
+            return false;
+        }
     }
 
     private void applyDefaultDomain() {

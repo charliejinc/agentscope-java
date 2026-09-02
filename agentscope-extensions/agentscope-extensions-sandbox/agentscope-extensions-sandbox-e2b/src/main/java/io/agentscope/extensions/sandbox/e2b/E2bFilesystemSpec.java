@@ -57,6 +57,9 @@ public class E2bFilesystemSpec extends SandboxFilesystemSpec {
 
     public E2bFilesystemSpec workspaceRoot(String workspaceRoot) {
         options.setWorkspaceRoot(workspaceRoot);
+        if (workspaceRoot != null && !workspaceRoot.isBlank()) {
+            defaultWorkspaceSpec.setRoot(workspaceRoot.trim());
+        }
         return this;
     }
 
