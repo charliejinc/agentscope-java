@@ -124,8 +124,7 @@ public class DaytonaSandboxClient implements SandboxClient<DaytonaSandboxClientO
         }
     }
 
-    private static void rebindRemoteSnapshot(
-            SandboxState state, SandboxSnapshotSpec snapshotSpec) {
+    private static void rebindRemoteSnapshot(SandboxState state, SandboxSnapshotSpec snapshotSpec) {
         if (!(snapshotSpec instanceof RemoteSnapshotSpec remoteSnapshotSpec)) {
             return;
         }

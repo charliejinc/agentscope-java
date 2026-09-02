@@ -127,8 +127,7 @@ public class E2bSandboxClient implements SandboxClient<E2bSandboxClientOptions> 
         }
     }
 
-    private static void rebindRemoteSnapshot(
-            SandboxState state, SandboxSnapshotSpec snapshotSpec) {
+    private static void rebindRemoteSnapshot(SandboxState state, SandboxSnapshotSpec snapshotSpec) {
         if (!(snapshotSpec instanceof RemoteSnapshotSpec remoteSnapshotSpec)) {
             return;
         }
