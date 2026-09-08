@@ -185,7 +185,10 @@ public class SessionTranscriptWriter {
      * Derives zero or more session entries from a single {@link Msg}.
      *
      * <ul>
-     *   <li>Text / thinking → one {@link SessionEntry.MessageEntry}</li>
+     *   <li>Thinking → one {@link SessionEntry.MessageEntry} with {@code blockTypes=["thinking"]},
+     *       kept separate from visible text so transcript consumers (history replay) can render
+     *       reasoning distinctly instead of showing it merged into the reply</li>
+     *   <li>Text → one {@link SessionEntry.MessageEntry}</li>
      *   <li>Each {@link ToolUseBlock} → one {@link SessionEntry.ToolUseEntry}</li>
      *   <li>Each {@link ToolResultBlock} → one {@link SessionEntry.ToolResultEntry}</li>
      *   <li>Only non-text/non-tool blocks → one placeholder {@link SessionEntry.MessageEntry}
@@ -201,6 +204,7 @@ public class SessionTranscriptWriter {
             blocks = List.of();
         }
 
+        List<String> thinkingParts = new ArrayList<>();
         List<String> textParts = new ArrayList<>();
         List<String> allBlockTypes = new ArrayList<>();
         List<ToolUseBlock> toolUses = new ArrayList<>();
@@ -216,7 +220,7 @@ public class SessionTranscriptWriter {
             } else if (block instanceof ThinkingBlock th) {
                 String thinking = th.getThinking();
                 if (thinking != null && !thinking.isBlank()) {
-                    textParts.add(thinking);
+                    thinkingParts.add(thinking);
                 }
             } else if (block instanceof ToolUseBlock tu) {
                 toolUses.add(tu);
@@ -226,20 +230,44 @@ public class SessionTranscriptWriter {
         }
 
         String lastParent = parentId;
+        boolean hasThinking = !thinkingParts.isEmpty();
         boolean hasText = !textParts.isEmpty();
         boolean hasTools = !toolUses.isEmpty() || !toolResults.isEmpty();
 
-        if (hasText || (!hasTools && !allBlockTypes.isEmpty())) {
-            // Text message, or A7 placeholder when only non-renderable blocks exist.
-            String entryId = msgId != null ? msgId : null;
-            String content = hasText ? String.join("\n", textParts) : "";
-            List<String> blockTypes = hasText ? null : List.copyOf(allBlockTypes);
+        if (hasThinking) {
+            SessionEntry.MessageEntry thinking =
+                    new SessionEntry.MessageEntry(
+                            msgId != null ? msgId + ":thinking" : null,
+                            lastParent,
+                            null,
+                            role,
+                            String.join("\n", thinkingParts),
+                            null,
+                            List.of("thinking"));
+            out.add(thinking);
+            lastParent = thinking.getId();
+        }
+
+        if (hasText) {
             SessionEntry.MessageEntry message =
                     new SessionEntry.MessageEntry(
-                            entryId, lastParent, null, role, content, null, blockTypes);
+                            msgId,
+                            lastParent,
+                            null,
+                            role,
+                            String.join("\n", textParts),
+                            null,
+                            null);
             out.add(message);
             lastParent = message.getId();
-        } else if (!hasTools && allBlockTypes.isEmpty()) {
+        } else if (!hasThinking && !hasTools && !allBlockTypes.isEmpty()) {
+            // A7 placeholder: only non-renderable blocks (e.g. image-only).
+            SessionEntry.MessageEntry message =
+                    new SessionEntry.MessageEntry(
+                            msgId, lastParent, null, role, "", null, List.copyOf(allBlockTypes));
+            out.add(message);
+            lastParent = message.getId();
+        } else if (!hasThinking && !hasTools && allBlockTypes.isEmpty()) {
             // Empty content list — still leave a trace so the turn is visible.
             SessionEntry.MessageEntry placeholder =
                     new SessionEntry.MessageEntry(
