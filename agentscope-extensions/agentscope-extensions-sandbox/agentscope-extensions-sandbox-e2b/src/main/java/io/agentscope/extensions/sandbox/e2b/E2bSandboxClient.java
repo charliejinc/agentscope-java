@@ -132,11 +132,18 @@ public class E2bSandboxClient implements SandboxClient<E2bSandboxClientOptions> 
             return;
         }
         SandboxSnapshot snapshot = state.getSnapshot();
-        if (!(snapshot instanceof RemoteSandboxSnapshot)) {
+        if (snapshot instanceof RemoteSandboxSnapshot) {
+            state.setSnapshot(
+                    new RemoteSandboxSnapshot(remoteSnapshotSpec.getClient(), snapshot.getId()));
             return;
         }
-        state.setSnapshot(
-                new RemoteSandboxSnapshot(remoteSnapshotSpec.getClient(), snapshot.getId()));
+        // State persisted before remote snapshots were configured (null or a non-remote
+        // placeholder such as NoopSandboxSnapshot). Left as-is it would keep workspace
+        // persistence disabled forever: stop() skips noop snapshots, so no archive is ever
+        // written and every later resume deserializes the same placeholder. Upgrade to the
+        // current spec with a fresh id — the first stop() writes the archive, and later
+        // resumes continue from it.
+        state.setSnapshot(remoteSnapshotSpec.build(java.util.UUID.randomUUID().toString()));
     }
 
     private E2bSandboxClientOptions merge(E2bSandboxClientOptions call) {

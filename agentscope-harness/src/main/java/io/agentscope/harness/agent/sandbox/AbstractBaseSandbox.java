@@ -131,10 +131,25 @@ public abstract class AbstractBaseSandbox implements Sandbox {
     @Override
     public void stop() throws Exception {
         SandboxSnapshot snapshot = state.getSnapshot();
-        if (snapshot != null && snapshot.isPersistenceEnabled()) {
+        if (snapshot == null) {
+            log.info(
+                    "[sandbox] stop: no snapshot configured for sessionId={}, workspace will not"
+                            + " survive sandbox recreation",
+                    state.getSessionId());
+        } else if (!snapshot.isPersistenceEnabled()) {
+            log.info(
+                    "[sandbox] stop: snapshot persistence disabled (type={}, id={}), skipping",
+                    snapshot.getType(),
+                    snapshot.getId());
+        } else {
+            long start = System.currentTimeMillis();
             try (InputStream archive = doPersistWorkspace()) {
                 snapshot.persist(archive);
             }
+            log.info(
+                    "[sandbox] stop: persisted workspace snapshot id={} in {}ms",
+                    snapshot.getId(),
+                    System.currentTimeMillis() - start);
         }
         state.setWorkspaceRootReady(true);
         running.set(false);

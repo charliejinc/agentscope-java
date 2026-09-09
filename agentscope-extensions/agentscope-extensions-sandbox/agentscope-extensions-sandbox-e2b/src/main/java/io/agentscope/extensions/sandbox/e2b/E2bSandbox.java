@@ -26,6 +26,7 @@ import io.agentscope.harness.agent.sandbox.WorkspaceMountSupport;
 import java.io.ByteArrayInputStream;
 import java.io.InputStream;
 import java.util.Base64;
+import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -48,6 +49,15 @@ public class E2bSandbox extends AbstractBaseSandbox {
     private final E2bSandboxClientOptions opt;
     private final E2bPlatformHttp platform;
     private E2bEnvdProcessClient envd;
+
+    /**
+     * Serialises workspace archive transfers (persist + hydrate) on this sandbox. The chunked
+     * base64 hydration and the live workspace it extracts into cannot interleave: overlapping
+     * hydrations used to corrupt each other (shared temp file + interleaved appends surfaced
+     * as {@code binascii.Error: Incorrect padding}), and a persist racing a hydrate would tar a
+     * half-applied workspace.
+     */
+    private final Object workspaceTransferLock = new Object();
 
     public E2bSandbox(E2bSandboxState state, E2bSandboxClientOptions opt) {
         super(state);
@@ -96,16 +106,19 @@ public class E2bSandbox extends AbstractBaseSandbox {
             }
             return new ByteArrayInputStream(E2bSnapshotRefs.encodeSnapshotId(id));
         }
-        String root = e2bState.getWorkspaceRoot();
-        StringBuilder script = new StringBuilder("tar ");
-        for (String ex :
-                WorkspaceMountSupport.tarExcludeArgsForBindMounts(e2bState.getWorkspaceSpec())) {
-            script.append(ex).append(' ');
+        synchronized (workspaceTransferLock) {
+            String root = e2bState.getWorkspaceRoot();
+            StringBuilder script = new StringBuilder("tar ");
+            for (String ex :
+                    WorkspaceMountSupport.tarExcludeArgsForBindMounts(
+                            e2bState.getWorkspaceSpec())) {
+                script.append(ex).append(' ');
+            }
+            script.append("-cf - -C ").append(shellSingleQuote(root)).append(" .");
+            String cmd = script.toString();
+            byte[] tar = envd().runShellBinaryStdout(e2bState, root, cmd, TAR_TIMEOUT_SECONDS);
+            return new ByteArrayInputStream(tar);
         }
-        script.append("-cf - -C ").append(shellSingleQuote(root)).append(" .");
-        String cmd = script.toString();
-        byte[] tar = envd().runShellBinaryStdout(e2bState, root, cmd, TAR_TIMEOUT_SECONDS);
-        return new ByteArrayInputStream(tar);
     }
 
     @Override
@@ -113,32 +126,62 @@ public class E2bSandbox extends AbstractBaseSandbox {
         byte[] all = archive.readAllBytes();
         String nativeId = E2bSnapshotRefs.decodeSnapshotIdIfPresent(all);
         if (nativeId != null && !nativeId.isBlank()) {
-            restoreSandboxFromSnapshotTemplate(nativeId);
+            synchronized (workspaceTransferLock) {
+                restoreSandboxFromSnapshotTemplate(nativeId);
+            }
             return;
         }
-        String root = e2bState.getWorkspaceRoot();
-        String b64 = Base64.getEncoder().encodeToString(all);
-        envd().runShell(e2bState, root, "rm -f /tmp/agentscope-ws.b64", 30);
-        ObjectMapper om = new ObjectMapper();
-        for (int i = 0; i < b64.length(); i += B64_CHUNK) {
-            String chunk = b64.substring(i, Math.min(b64.length(), i + B64_CHUNK));
-            String lit = om.writeValueAsString(chunk);
-            String py =
-                    "import pathlib; pathlib.Path('/tmp/agentscope-ws.b64').open('a').write("
-                            + lit
-                            + ")";
-            envd().runShell(e2bState, root, "python3 -c " + shellSingleQuote(py), 120);
+        synchronized (workspaceTransferLock) {
+            String root = e2bState.getWorkspaceRoot();
+            String b64 = Base64.getEncoder().encodeToString(all);
+            // Unique per call: a crashed or still-overlapping transfer on the same sandbox can
+            // never corrupt this one (the previous fixed path /tmp/agentscope-ws.b64 did).
+            String tmpPath = "/tmp/agentscope-ws-" + UUID.randomUUID() + ".b64";
+            try {
+                envd().runShell(e2bState, root, "rm -f " + tmpPath, 30);
+                ObjectMapper om = new ObjectMapper();
+                for (int i = 0; i < b64.length(); i += B64_CHUNK) {
+                    String chunk = b64.substring(i, Math.min(b64.length(), i + B64_CHUNK));
+                    String lit = om.writeValueAsString(chunk);
+                    String py =
+                            "import pathlib; pathlib.Path("
+                                    + om.writeValueAsString(tmpPath)
+                                    + ").open('a').write("
+                                    + lit
+                                    + ")";
+                    envd().runShell(e2bState, root, "python3 -c " + shellSingleQuote(py), 120);
+                }
+                // Fail fast with a readable error when the chunked transfer lost data, instead
+                // of the opaque base64 padding error at decode time.
+                String pyFin =
+                        "import base64,pathlib,subprocess; p="
+                                + om.writeValueAsString(tmpPath)
+                                + "; s=pathlib.Path(p).read_text()"
+                                + "; assert len(s)=="
+                                + b64.length()
+                                + ", 'snapshot b64 corrupted in transit: expected "
+                                + b64.length()
+                                + " chars, got %d' % len(s)"
+                                + "; raw=base64.standard_b64decode(s)"
+                                + "; subprocess.run(['tar','xf','-','-C',"
+                                + om.writeValueAsString(root)
+                                + "],input=raw,check=True)";
+                envd().runShell(
+                                e2bState,
+                                root,
+                                "python3 -c " + shellSingleQuote(pyFin),
+                                TAR_TIMEOUT_SECONDS);
+            } finally {
+                try {
+                    envd().runShell(e2bState, root, "rm -f " + tmpPath, 30);
+                } catch (Exception e) {
+                    log.debug(
+                            "[sandbox-e2b] best-effort cleanup of {} failed: {}",
+                            tmpPath,
+                            e.getMessage());
+                }
+            }
         }
-        String pyFin =
-                "import base64,pathlib,subprocess; d="
-                        + om.writeValueAsString(root)
-                        + "; raw=base64.standard_b64decode(pathlib.Path('/tmp/agentscope-ws.b64').read_text());"
-                        + " subprocess.run(['tar','xf','-','-C',d],input=raw,check=True)";
-        envd().runShell(
-                        e2bState,
-                        root,
-                        "python3 -c " + shellSingleQuote(pyFin),
-                        TAR_TIMEOUT_SECONDS);
     }
 
     @Override
