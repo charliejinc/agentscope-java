@@ -25,6 +25,7 @@ import io.agentscope.core.message.ImageBlock;
 import io.agentscope.core.message.Msg;
 import io.agentscope.core.message.MsgRole;
 import io.agentscope.core.message.TextBlock;
+import io.agentscope.core.message.ThinkingBlock;
 import io.agentscope.core.message.ToolResultBlock;
 import io.agentscope.core.message.ToolUseBlock;
 import io.agentscope.core.message.URLSource;
@@ -124,6 +125,34 @@ class SessionTranscriptWriterTest {
         assertEquals("t1", result.getToolCallId());
         assertEquals("meow", result.getOutput());
         assertFalse(result.isTruncated());
+    }
+
+    @Test
+    void deriveEntries_splitsThinkingFromText() {
+        Msg msg =
+                Msg.builder()
+                        .id("m1")
+                        .role(MsgRole.ASSISTANT)
+                        .content(
+                                ThinkingBlock.builder().thinking("reasoning step").build(),
+                                TextBlock.builder().text("final answer").build())
+                        .build();
+
+        List<SessionEntry> entries = SessionTranscriptWriter.deriveEntries(msg, null);
+        assertEquals(2, entries.size());
+
+        SessionEntry.MessageEntry thinking =
+                assertInstanceOf(SessionEntry.MessageEntry.class, entries.get(0));
+        assertEquals("m1:thinking", thinking.getId());
+        assertEquals("reasoning step", thinking.getContent());
+        assertEquals(List.of("thinking"), thinking.getBlockTypes());
+
+        SessionEntry.MessageEntry text =
+                assertInstanceOf(SessionEntry.MessageEntry.class, entries.get(1));
+        assertEquals("m1", text.getId());
+        assertEquals("final answer", text.getContent());
+        assertEquals(thinking.getId(), text.getParentId());
+        assertEquals(null, text.getBlockTypes());
     }
 
     @Test
