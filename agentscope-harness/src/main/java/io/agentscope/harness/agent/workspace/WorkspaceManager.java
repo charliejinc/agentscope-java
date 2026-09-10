@@ -820,7 +820,9 @@ public class WorkspaceManager implements AutoCloseable {
         if (!fsContent.isEmpty()) {
             return fsContent;
         }
-        return readFileQuietly(workspace.resolve(relativePath));
+        // Local-disk fallback must apply the same namespace prefix the filesystem layer uses
+        // (per-user data lives under workspace/<namespace>/...), or namespaced files are missed.
+        return readFileQuietly(resolveRuntimeDataPath(rc, relativePath));
     }
 
     private String readFileQuietly(Path path) {
@@ -839,7 +841,19 @@ public class WorkspaceManager implements AutoCloseable {
         if (filesystem == null) {
             return "";
         }
-        ReadResult r = filesystem.read(rc, filePath, 0, 0);
+        final ReadResult r;
+        try {
+            r = filesystem.read(rc, filePath, 0, 0);
+        } catch (RuntimeException e) {
+            // Sandbox-backed filesystems require an active per-call binding; async readers
+            // (e.g. post-turn transcript sync) run outside a call context. Degrade to the
+            // local-disk fallback in readWithOverride instead of failing the read entirely.
+            log.debug(
+                    "Filesystem read failed for {}; falling back to local disk: {}",
+                    filePath,
+                    e.getMessage());
+            return "";
+        }
         if (!r.isSuccess() || r.fileData() == null) {
             return "";
         }
