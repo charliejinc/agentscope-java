@@ -30,7 +30,6 @@ import io.agentscope.harness.agent.sandbox.WorkspaceSpec;
 import io.agentscope.harness.agent.sandbox.json.HarnessSandboxJacksonModule;
 import io.agentscope.harness.agent.sandbox.snapshot.RemoteSandboxSnapshot;
 import io.agentscope.harness.agent.sandbox.snapshot.RemoteSnapshotSpec;
-import io.agentscope.harness.agent.sandbox.snapshot.SandboxSnapshot;
 import io.agentscope.harness.agent.sandbox.snapshot.SandboxSnapshotSpec;
 import io.fabric8.kubernetes.client.KubernetesClient;
 import io.fabric8.kubernetes.client.KubernetesClientBuilder;
@@ -191,28 +190,19 @@ public class KubernetesSandboxClient
         }
     }
 
+    /**
+     * Restores the runtime storage client omitted from remote snapshot JSON while keeping the
+     * persisted archive id. This is needed even when the existing Kubernetes claim resumes
+     * successfully and the manager does not fall back to creating a new sandbox.
+     */
     @Override
     public SandboxState deserializeState(String json, SandboxSnapshotSpec snapshotSpec) {
-        try {
-            SandboxState state = objectMapper.readValue(json, SandboxState.class);
-            rebindRemoteSnapshot(state, snapshotSpec);
-            return state;
-        } catch (Exception e) {
-            throw new SandboxException.SandboxConfigurationException(
-                    "Failed to deserialize Kubernetes sandbox state", e);
+        SandboxState state = deserializeState(json);
+        if (snapshotSpec instanceof RemoteSnapshotSpec remoteSpec
+                && state.getSnapshot() instanceof RemoteSandboxSnapshot snapshot) {
+            state.setSnapshot(new RemoteSandboxSnapshot(remoteSpec.getClient(), snapshot.getId()));
         }
-    }
-
-    private static void rebindRemoteSnapshot(SandboxState state, SandboxSnapshotSpec snapshotSpec) {
-        if (!(snapshotSpec instanceof RemoteSnapshotSpec remoteSnapshotSpec)) {
-            return;
-        }
-        SandboxSnapshot snapshot = state.getSnapshot();
-        if (!(snapshot instanceof RemoteSandboxSnapshot)) {
-            return;
-        }
-        state.setSnapshot(
-                new RemoteSandboxSnapshot(remoteSnapshotSpec.getClient(), snapshot.getId()));
+        return state;
     }
 
     private SandboxClient buildSdkClient(KubernetesSandboxClientOptions opts) {
