@@ -792,7 +792,16 @@ public class WorkspaceManager implements AutoCloseable {
         }
         // Local-disk fallback must apply the same namespace prefix the filesystem layer uses
         // (per-user data lives under workspace/<namespace>/...), or namespaced files are missed.
-        return readFileQuietly(resolveRuntimeDataPath(rc, relativePath));
+        Path namespaced = resolveRuntimeDataPath(rc, relativePath);
+        String namespacedContent = readFileQuietly(namespaced);
+        if (!namespacedContent.isEmpty()) {
+            return namespacedContent;
+        }
+        // Shared files kept at the bare workspace root (AGENTS.md, MEMORY.md,
+        // knowledge/KNOWLEDGE.md) must stay readable while a namespace is active; the namespaced
+        // copy wins when present, the root copy is the shared baseline.
+        Path root = workspace.resolve(relativePath);
+        return root.equals(namespaced) ? "" : readFileQuietly(root);
     }
 
     private String readFileQuietly(Path path) {
