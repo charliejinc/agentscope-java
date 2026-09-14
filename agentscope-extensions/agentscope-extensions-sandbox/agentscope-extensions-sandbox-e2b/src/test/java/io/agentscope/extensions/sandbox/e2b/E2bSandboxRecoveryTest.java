@@ -21,8 +21,17 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.agentscope.harness.agent.sandbox.WorkspaceSpec;
+import java.io.IOException;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
+import java.nio.charset.StandardCharsets;
+import okhttp3.Interceptor;
+import okhttp3.MediaType;
+import okhttp3.OkHttpClient;
+import okhttp3.Protocol;
+import okhttp3.Request;
+import okhttp3.Response;
+import okhttp3.ResponseBody;
 import okhttp3.mockwebserver.MockResponse;
 import okhttp3.mockwebserver.MockWebServer;
 import okhttp3.mockwebserver.RecordedRequest;
@@ -86,12 +95,88 @@ class E2bSandboxRecoveryTest {
         assertEquals("/sandboxes/old-sandbox/connect", server.takeRequest().getPath());
     }
 
+    @Test
+    void unhealthyReconnectRecreatesSandboxAndClearsState() throws Exception {
+        server.enqueue(
+                new MockResponse()
+                        .setResponseCode(200)
+                        .setHeader("Content-Type", "application/json")
+                        .setBody("{\"sandboxID\":\"old-sandbox\"}"));
+        server.enqueue(new MockResponse().setResponseCode(204));
+        server.enqueue(
+                new MockResponse()
+                        .setResponseCode(200)
+                        .setHeader("Content-Type", "application/json")
+                        .setBody(
+                                "{\"sandboxID\":\"new-sandbox\","
+                                        + "\"domain\":\"new.e2b.app\","
+                                        + "\"envdAccessToken\":\"new-token\"}"));
+        E2bSandboxState state = stateForResume();
+
+        invokeEnsureSandbox(new E2bSandbox(state, options(1)));
+
+        assertEquals("new-sandbox", state.getSandboxId());
+        assertFalse(state.isWorkspaceRootReady());
+        assertNull(state.getWorkspaceProjectionHash());
+        assertEquals("/sandboxes/old-sandbox/connect", server.takeRequest().getPath());
+        assertEquals("/sandboxes/old-sandbox", server.takeRequest().getPath());
+        assertEquals("/sandboxes", server.takeRequest().getPath());
+    }
+
     private E2bSandboxClientOptions options() {
+        return options(0);
+    }
+
+    /**
+     * @param envdExitCode exit code reported by the stubbed envd health probe; non-zero makes {@code
+     *     ensureSandbox} treat the reconnected sandbox as unhealthy and recreate it.
+     */
+    private E2bSandboxClientOptions options(int envdExitCode) {
         E2bSandboxClientOptions options = new E2bSandboxClientOptions();
         options.setApiBaseUrl(server.url("/").toString());
         options.setApiKey("test-key");
         options.setMaxRetries(1);
+        options.setCodec(E2bCodec.JSON);
+        options.setHttpClient(
+                new OkHttpClient.Builder()
+                        .addInterceptor(new EnvdProcessStub(envdExitCode))
+                        .build());
         return options;
+    }
+
+    /**
+     * Answers envd process starts in-process and lets every other call through to {@link #server}.
+     * A real probe would target {@code https://49983-{sandboxId}.{domain}}, which no test server can
+     * answer.
+     */
+    private static final class EnvdProcessStub implements Interceptor {
+
+        private static final MediaType CONNECT_JSON = MediaType.get("application/connect+json");
+
+        private final int exitCode;
+
+        EnvdProcessStub(int exitCode) {
+            this.exitCode = exitCode;
+        }
+
+        @Override
+        public Response intercept(Chain chain) throws IOException {
+            Request request = chain.request();
+            if (!"/process.Process/Start".equals(request.url().encodedPath())) {
+                return chain.proceed(request);
+            }
+            byte[] frame =
+                    E2bEnvdProcessClient.encodeUnaryEnvelope(
+                            ("{\"event\":{\"end\":{\"exitCode\":" + exitCode + "}}}")
+                                    .getBytes(StandardCharsets.UTF_8));
+            return new Response.Builder()
+                    .request(request)
+                    .protocol(Protocol.HTTP_1_1)
+                    .code(200)
+                    .message("OK")
+                    .body(ResponseBody.create(frame, CONNECT_JSON))
+                    .build();
+        }
     }
 
     private static E2bSandboxState stateForResume() {
