@@ -114,6 +114,12 @@ public class E2bSandbox extends AbstractBaseSandbox {
                             e2bState.getWorkspaceSpec())) {
                 script.append(ex).append(' ');
             }
+            // Exclude pip user-site packages and cache: they are runtime artifacts from
+            // document parsing tools (pypdf etc.), not user workspace content. Including
+            // them bloats the snapshot from ~37 files to ~250 files and turns a 25s
+            // restore into a 163s one.
+            script.append("--exclude='./.local/lib/python*/site-packages' ");
+            script.append("--exclude='./.cache/pip' ");
             script.append("-cf - -C ").append(shellSingleQuote(root)).append(" .");
             String cmd = script.toString();
             byte[] tar = envd().runShellBinaryStdout(e2bState, root, cmd, TAR_TIMEOUT_SECONDS);
