@@ -24,9 +24,13 @@ import io.agentscope.harness.agent.sandbox.SandboxErrorCode;
 import io.agentscope.harness.agent.sandbox.SandboxException;
 import io.agentscope.harness.agent.sandbox.WorkspaceMountSupport;
 import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
 import java.io.InputStream;
 import java.util.Base64;
 import java.util.UUID;
+import java.util.zip.GZIPInputStream;
+import java.util.zip.GZIPOutputStream;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -123,7 +127,12 @@ public class E2bSandbox extends AbstractBaseSandbox {
             script.append("-cf - -C ").append(shellSingleQuote(root)).append(" .");
             String cmd = script.toString();
             byte[] tar = envd().runShellBinaryStdout(e2bState, root, cmd, TAR_TIMEOUT_SECONDS);
-            return new ByteArrayInputStream(tar);
+            byte[] compressed = gzip(tar);
+            log.debug(
+                    "[sandbox-e2b] workspace archive tar={}B gzip={}B",
+                    tar.length,
+                    compressed.length);
+            return new ByteArrayInputStream(compressed);
         }
     }
 
@@ -137,9 +146,15 @@ public class E2bSandbox extends AbstractBaseSandbox {
             }
             return;
         }
+        byte[] tar = gunzipIfCompressed(all);
         synchronized (workspaceTransferLock) {
             String root = e2bState.getWorkspaceRoot();
-            String b64 = Base64.getEncoder().encodeToString(all);
+            String b64 = Base64.getEncoder().encodeToString(tar);
+            log.debug(
+                    "[sandbox-e2b] hydrating workspace: snapshot={}B tar={}B chunks={}",
+                    all.length,
+                    tar.length,
+                    (b64.length() + B64_CHUNK - 1) / B64_CHUNK);
             // Unique per call: a crashed or still-overlapping transfer on the same sandbox can
             // never corrupt this one (the previous fixed path /tmp/agentscope-ws.b64 did).
             String tmpPath = "/tmp/agentscope-ws-" + UUID.randomUUID() + ".b64";
@@ -317,6 +332,25 @@ public class E2bSandbox extends AbstractBaseSandbox {
             }
         }
         return c;
+    }
+
+    /** Restore pushes the archive in {@link #B64_CHUNK} pieces, one envd round trip each. */
+    static byte[] gzip(byte[] raw) throws IOException {
+        ByteArrayOutputStream buf = new ByteArrayOutputStream(Math.max(64, raw.length / 4));
+        try (GZIPOutputStream out = new GZIPOutputStream(buf)) {
+            out.write(raw);
+        }
+        return buf.toByteArray();
+    }
+
+    /** Snapshots persisted before compression are plain tars, and stores are shared across versions. */
+    static byte[] gunzipIfCompressed(byte[] data) throws IOException {
+        if (data.length < 2 || (data[0] & 0xff) != 0x1f || (data[1] & 0xff) != 0x8b) {
+            return data;
+        }
+        try (GZIPInputStream in = new GZIPInputStream(new ByteArrayInputStream(data))) {
+            return in.readAllBytes();
+        }
     }
 
     private static String shellSingleQuote(String s) {
