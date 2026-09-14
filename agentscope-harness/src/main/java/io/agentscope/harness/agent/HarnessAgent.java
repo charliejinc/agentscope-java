@@ -2445,7 +2445,8 @@ public class HarnessAgent implements Agent, AutoCloseable {
                                 defaultSandboxContext.getClient(),
                                 stateStore,
                                 resolvedAgentId,
-                                executionGuard);
+                                executionGuard,
+                                sandboxFilesystemSpec.getReleasePolicy());
                 sandboxLifecycleMw =
                         new SandboxLifecycleMiddleware(sandboxManager, capturedSandboxFs);
             } else if (!filesystemRoutes.isEmpty()) {

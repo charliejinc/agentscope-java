@@ -20,6 +20,7 @@ import io.agentscope.harness.agent.sandbox.SandboxClient;
 import io.agentscope.harness.agent.sandbox.SandboxClientOptions;
 import io.agentscope.harness.agent.sandbox.SandboxContext;
 import io.agentscope.harness.agent.sandbox.SandboxExecutionGuard;
+import io.agentscope.harness.agent.sandbox.SandboxReleasePolicy;
 import io.agentscope.harness.agent.sandbox.WorkspaceSpec;
 import io.agentscope.harness.agent.sandbox.layout.WorkspaceEntry;
 import io.agentscope.harness.agent.sandbox.layout.WorkspaceProjectionEntry;
@@ -44,6 +45,7 @@ public abstract class SandboxFilesystemSpec {
     private IsolationScope isolationScope;
     private SandboxSnapshotSpec snapshotSpecOverride;
     private SandboxExecutionGuard executionGuard;
+    private SandboxReleasePolicy releasePolicy;
     private boolean workspaceProjectionEnabled = true;
     private List<String> workspaceProjectionRoots = DEFAULT_WORKSPACE_PROJECTION_ROOTS;
 
@@ -92,6 +94,26 @@ public abstract class SandboxFilesystemSpec {
 
     public SandboxExecutionGuard getExecutionGuard() {
         return executionGuard;
+    }
+
+    /**
+     * Sets what happens to a harness-created sandbox when a call finishes.
+     *
+     * <p>Defaults to {@code null}, meaning {@link SandboxReleasePolicy#STOP_AND_SHUTDOWN}. Cloud
+     * sandboxes usually want {@link SandboxReleasePolicy#SNAPSHOT_ONLY}: recreating a sandbox and
+     * rehydrating its workspace costs orders of magnitude more than letting it expire on its own
+     * provider-side timeout, and the persisted state lets any process reconnect to it.
+     *
+     * @param releasePolicy the policy to apply, or {@code null} for the default
+     * @return this spec
+     */
+    public SandboxFilesystemSpec releasePolicy(SandboxReleasePolicy releasePolicy) {
+        this.releasePolicy = releasePolicy;
+        return this;
+    }
+
+    public SandboxReleasePolicy getReleasePolicy() {
+        return releasePolicy;
     }
 
     public SandboxFilesystemSpec workspaceProjectionEnabled(boolean enabled) {

@@ -48,6 +48,7 @@ public class SandboxManager {
     private final SessionSandboxStateStore stateStore;
     private final String agentId;
     private final SandboxExecutionGuard executionGuard;
+    private final SandboxReleasePolicy releasePolicy;
 
     public SandboxManager(
             SandboxClient<?> client, SessionSandboxStateStore stateStore, String agentId) {
@@ -59,11 +60,22 @@ public class SandboxManager {
             SessionSandboxStateStore stateStore,
             String agentId,
             SandboxExecutionGuard executionGuard) {
+        this(client, stateStore, agentId, executionGuard, SandboxReleasePolicy.STOP_AND_SHUTDOWN);
+    }
+
+    public SandboxManager(
+            SandboxClient<?> client,
+            SessionSandboxStateStore stateStore,
+            String agentId,
+            SandboxExecutionGuard executionGuard,
+            SandboxReleasePolicy releasePolicy) {
         this.client = Objects.requireNonNull(client, "client must not be null");
         this.stateStore = Objects.requireNonNull(stateStore, "stateStore must not be null");
         this.agentId = Objects.requireNonNull(agentId, "agentId must not be null");
         this.executionGuard =
                 executionGuard != null ? executionGuard : SandboxExecutionGuard.noop();
+        this.releasePolicy =
+                releasePolicy != null ? releasePolicy : SandboxReleasePolicy.STOP_AND_SHUTDOWN;
     }
 
     public SandboxAcquireResult acquire(
@@ -202,6 +214,15 @@ public class SandboxManager {
             sandbox.stop();
         } catch (Exception e) {
             log.warn("[sandbox] Sandbox stop failed: {}", e.getMessage(), e);
+        }
+
+        // The guard lease is closed by the caller after release() returns, so leaving early here
+        // does not strand it.
+        if (releasePolicy == SandboxReleasePolicy.SNAPSHOT_ONLY) {
+            log.debug(
+                    "[sandbox] Keeping sandbox alive after release (policy=SNAPSHOT_ONLY);"
+                            + " it expires on its provider-side timeout");
+            return;
         }
 
         try {
