@@ -138,6 +138,76 @@ class DashScopeChatModelTest {
         assertNotNull(nonStreamingModel, "Non-streaming model should be created");
     }
 
+    @Test
+    @DisplayName("Explicit stream=false is honored when thinking mode is enabled")
+    void testExplicitNonStreamingHonoredWithThinking() throws Exception {
+        MockWebServer mockServer = new MockWebServer();
+        mockServer.start();
+        mockServer.enqueue(
+                new MockResponse()
+                        .setResponseCode(200)
+                        .setBody("{\"request_id\":\"test\",\"output\":{\"choices\":[]}}")
+                        .setHeader("Content-Type", "application/json"));
+
+        DashScopeChatModel chatModel =
+                DashScopeChatModel.builder().apiKey(mockApiKey).modelName("qwen-plus").stream(false)
+                        .enableThinking(true)
+                        .baseUrl(mockServer.url("/").toString().replaceAll("/$", ""))
+                        .httpTransport(OkHttpTransport.builder().build())
+                        .build();
+
+        chatModel
+                .doStream(testMessages(), List.of(), GenerateOptions.builder().build())
+                .blockLast();
+
+        String body = mockServer.takeRequest().getBody().readUtf8();
+        assertTrue(
+                body.contains("\"incremental_output\":false"),
+                "An explicit stream=false must not be rewritten: " + body);
+
+        mockServer.shutdown();
+    }
+
+    @Test
+    @DisplayName("Streaming defaults to true when not set explicitly")
+    void testStreamingDefaultsTrueWhenUnset() throws Exception {
+        MockWebServer mockServer = new MockWebServer();
+        mockServer.start();
+        mockServer.enqueue(
+                new MockResponse()
+                        .setResponseCode(200)
+                        .setBody("data: {\"request_id\":\"test\",\"output\":{\"choices\":[]}}\n\n")
+                        .setHeader("Content-Type", "text/event-stream"));
+
+        DashScopeChatModel chatModel =
+                DashScopeChatModel.builder()
+                        .apiKey(mockApiKey)
+                        .modelName("qwen-plus")
+                        .enableThinking(true)
+                        .baseUrl(mockServer.url("/").toString().replaceAll("/$", ""))
+                        .httpTransport(OkHttpTransport.builder().build())
+                        .build();
+
+        chatModel
+                .doStream(testMessages(), List.of(), GenerateOptions.builder().build())
+                .blockLast();
+
+        String body = mockServer.takeRequest().getBody().readUtf8();
+        assertTrue(
+                body.contains("\"incremental_output\":true"),
+                "Streaming should default to true when unset: " + body);
+
+        mockServer.shutdown();
+    }
+
+    private static List<Msg> testMessages() {
+        return List.of(
+                Msg.builder()
+                        .role(MsgRole.USER)
+                        .content(TextBlock.builder().text("test").build())
+                        .build());
+    }
+
     // ========== Thinking Mode Tests ==========
 
     @Test
@@ -705,6 +775,50 @@ class DashScopeChatModelTest {
     }
 
     @Test
+    @DisplayName("DashScope chat model should send reasoning_effort in request body")
+    void testDoNonStreamWithReasoningEffort() throws Exception {
+        MockWebServer mockServer = new MockWebServer();
+        mockServer.start();
+
+        mockServer.enqueue(
+                new MockResponse()
+                        .setResponseCode(200)
+                        .setBody(
+                                """
+                                        {
+                                            "request_id": "test",
+                                            "output": {
+                                                "choices": []
+                                            }
+                                        }
+                                """)
+                        .setHeader("Content-Type", "application/json"));
+
+        DashScopeChatModel chatModel =
+                DashScopeChatModel.builder().apiKey(mockApiKey).modelName("qwen-plus").stream(false)
+                        .enableThinking(true)
+                        .baseUrl(mockServer.url("/").toString().replaceAll("/$", ""))
+                        .httpTransport(OkHttpTransport.builder().build())
+                        .build();
+
+        chatModel
+                .doStream(
+                        List.of(
+                                Msg.builder()
+                                        .role(MsgRole.USER)
+                                        .content(TextBlock.builder().text("test").build())
+                                        .build()),
+                        List.of(),
+                        GenerateOptions.builder().reasoningEffort("high").build())
+                .blockLast();
+
+        RecordedRequest recorded = mockServer.takeRequest();
+        assertTrue(recorded.getBody().readUtf8().contains("\"reasoning_effort\":\"high\""));
+
+        mockServer.shutdown();
+    }
+
+    @Test
     @DisplayName("DashScope chat model apply thinking mode")
     void testApplyThinkingMode() {
         DashScopeChatModel chatModel =
@@ -826,6 +940,30 @@ class DashScopeChatModelTest {
                         .build();
 
         GenerateOptions options = GenerateOptions.builder().thinkingBudget(100).build();
+
+        assertThrows(
+                IllegalStateException.class,
+                () -> invokeApplyThinkingMode(chatModel, request, options));
+    }
+
+    @Test
+    @DisplayName(
+            "Should throw an IllegalStateException when setting reasoningEffort while thinking mode"
+                    + " is disabled")
+    void testApplyThinkingModeReasoningEffortValidation() {
+        DashScopeChatModel chatModel =
+                DashScopeChatModel.builder()
+                        .apiKey(mockApiKey)
+                        .modelName("qwen-plus")
+                        .enableThinking(false)
+                        .build();
+
+        DashScopeRequest request =
+                DashScopeRequest.builder()
+                        .parameters(DashScopeParameters.builder().build())
+                        .build();
+
+        GenerateOptions options = GenerateOptions.builder().reasoningEffort("high").build();
 
         assertThrows(
                 IllegalStateException.class,
