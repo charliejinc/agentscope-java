@@ -971,6 +971,28 @@ class DashScopeChatModelTest {
     }
 
     @Test
+    @DisplayName(
+            "Should not throw when setting reasoningEffort=none while thinking mode is disabled,"
+                    + " since none is the sentinel that disables thinking")
+    void testApplyThinkingModeReasoningEffortNoneSentinel() {
+        DashScopeChatModel chatModel =
+                DashScopeChatModel.builder()
+                        .apiKey(mockApiKey)
+                        .modelName("qwen-plus")
+                        .enableThinking(false)
+                        .build();
+
+        DashScopeRequest request =
+                DashScopeRequest.builder()
+                        .parameters(DashScopeParameters.builder().build())
+                        .build();
+
+        GenerateOptions options = GenerateOptions.builder().reasoningEffort("none").build();
+
+        assertDoesNotThrow(() -> invokeApplyThinkingMode(chatModel, request, options));
+    }
+
+    @Test
     @DisplayName("DashScope chat model non-stream should throw ModelException when occur error")
     void testDoNonStreamErrorHandling() throws Exception {
         MockWebServer mockServer = new MockWebServer();

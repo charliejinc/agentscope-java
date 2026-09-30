@@ -379,7 +379,14 @@ public class DashScopeChatModel extends ChatModelBase {
                         + ".defaultOptions(GenerateOptions.builder().thinkingBudget(1000).build())");
         }
 
-        if (options.getReasoningEffort() != null && !Boolean.TRUE.equals(enableThinking)) {
+        String reasoningEffort = options.getReasoningEffort();
+        // "none" is the sentinel that disables thinking (equivalent to enable_thinking=false
+        // on qwen3.8), so it must remain reachable without enabling thinking.
+        boolean reasoningEffortIsNone =
+                reasoningEffort != null && "none".equalsIgnoreCase(reasoningEffort);
+        if (reasoningEffort != null
+                && !reasoningEffortIsNone
+                && !Boolean.TRUE.equals(enableThinking)) {
             throw new IllegalStateException(
                     "reasoningEffort is set but enableThinking is not enabled. To use reasoning"
                             + " effort control, you must explicitly enable thinking by calling"
