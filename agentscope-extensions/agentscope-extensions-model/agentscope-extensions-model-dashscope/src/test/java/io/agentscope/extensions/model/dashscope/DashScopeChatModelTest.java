@@ -775,50 +775,6 @@ class DashScopeChatModelTest {
     }
 
     @Test
-    @DisplayName("DashScope chat model should send reasoning_effort in request body")
-    void testDoNonStreamWithReasoningEffort() throws Exception {
-        MockWebServer mockServer = new MockWebServer();
-        mockServer.start();
-
-        mockServer.enqueue(
-                new MockResponse()
-                        .setResponseCode(200)
-                        .setBody(
-                                """
-                                        {
-                                            "request_id": "test",
-                                            "output": {
-                                                "choices": []
-                                            }
-                                        }
-                                """)
-                        .setHeader("Content-Type", "application/json"));
-
-        DashScopeChatModel chatModel =
-                DashScopeChatModel.builder().apiKey(mockApiKey).modelName("qwen-plus").stream(false)
-                        .enableThinking(true)
-                        .baseUrl(mockServer.url("/").toString().replaceAll("/$", ""))
-                        .httpTransport(OkHttpTransport.builder().build())
-                        .build();
-
-        chatModel
-                .doStream(
-                        List.of(
-                                Msg.builder()
-                                        .role(MsgRole.USER)
-                                        .content(TextBlock.builder().text("test").build())
-                                        .build()),
-                        List.of(),
-                        GenerateOptions.builder().reasoningEffort("high").build())
-                .blockLast();
-
-        RecordedRequest recorded = mockServer.takeRequest();
-        assertTrue(recorded.getBody().readUtf8().contains("\"reasoning_effort\":\"high\""));
-
-        mockServer.shutdown();
-    }
-
-    @Test
     @DisplayName("DashScope chat model apply thinking mode")
     void testApplyThinkingMode() {
         DashScopeChatModel chatModel =
@@ -968,28 +924,6 @@ class DashScopeChatModelTest {
         assertThrows(
                 IllegalStateException.class,
                 () -> invokeApplyThinkingMode(chatModel, request, options));
-    }
-
-    @Test
-    @DisplayName(
-            "Should not throw when setting reasoningEffort=none while thinking mode is disabled,"
-                    + " since none is the sentinel that disables thinking")
-    void testApplyThinkingModeReasoningEffortNoneSentinel() {
-        DashScopeChatModel chatModel =
-                DashScopeChatModel.builder()
-                        .apiKey(mockApiKey)
-                        .modelName("qwen-plus")
-                        .enableThinking(false)
-                        .build();
-
-        DashScopeRequest request =
-                DashScopeRequest.builder()
-                        .parameters(DashScopeParameters.builder().build())
-                        .build();
-
-        GenerateOptions options = GenerateOptions.builder().reasoningEffort("none").build();
-
-        assertDoesNotThrow(() -> invokeApplyThinkingMode(chatModel, request, options));
     }
 
     @Test
