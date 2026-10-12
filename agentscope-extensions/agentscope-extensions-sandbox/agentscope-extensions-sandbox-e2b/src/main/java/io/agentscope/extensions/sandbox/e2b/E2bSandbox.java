@@ -28,6 +28,7 @@ import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.util.Base64;
+import java.util.List;
 import java.util.UUID;
 import java.util.zip.GZIPInputStream;
 import java.util.zip.GZIPOutputStream;
@@ -63,6 +64,14 @@ public class E2bSandbox extends AbstractBaseSandbox {
      */
     private final Object workspaceTransferLock = new Object();
 
+    /**
+     * Snapshot id created by the workspace persist in flight on this instance, or {@code null} when
+     * none is running. {@link #doPersistWorkspace()} sets it right before the id enters {@link
+     * E2bSandboxState#getSnapshotIds()}, so {@link #stop()} can drop exactly the id this call
+     * created when the archive fails to persist.
+     */
+    private String lastCreatedSnapshotId;
+
     public E2bSandbox(E2bSandboxState state, E2bSandboxClientOptions opt) {
         super(state);
         this.e2bState = state;
@@ -82,6 +91,25 @@ public class E2bSandbox extends AbstractBaseSandbox {
     }
 
     @Override
+    public void stop() throws Exception {
+        // Only the persist in flight may be rolled back: an id recorded by an earlier persist
+        // (e.g. a direct persistWorkspace() call) must not be dropped by a later failure here.
+        lastCreatedSnapshotId = null;
+        try {
+            super.stop();
+        } catch (Exception e) {
+            String created = lastCreatedSnapshotId;
+            if (created != null) {
+                e2bState.getSnapshotIds().remove(created);
+                log.debug(
+                        "[sandbox-e2b] rolled back snapshot id {} after failed workspace persist",
+                        created);
+            }
+            throw e;
+        }
+    }
+
+    @Override
     public void shutdown() throws Exception {
         if (!e2bState.isSandboxOwned()) {
             return;
@@ -90,6 +118,9 @@ public class E2bSandbox extends AbstractBaseSandbox {
         if (id != null && !id.isBlank()) {
             platform.killSandbox(id);
         }
+        // Only after killSandbox are the snapshot templates unlocked by E2B (deleting them while a
+        // sandbox restored from one runs returns 400), so clean up here to converge to retention.
+        cleanupSnapshots();
     }
 
     @Override
@@ -108,6 +139,8 @@ public class E2bSandbox extends AbstractBaseSandbox {
                         SandboxErrorCode.WORKSPACE_ARCHIVE_WRITE_ERROR,
                         "E2B snapshot response missing snapshotID: " + snap);
             }
+            lastCreatedSnapshotId = id;
+            e2bState.getSnapshotIds().add(id);
             return new ByteArrayInputStream(E2bSnapshotRefs.encodeSnapshotId(id));
         }
         synchronized (workspaceTransferLock) {
@@ -319,6 +352,22 @@ public class E2bSandbox extends AbstractBaseSandbox {
             }
         }
         envd = null;
+    }
+
+    private void cleanupSnapshots() {
+        int retention = opt.getSnapshotRetention();
+        if (retention <= 0) {
+            return;
+        }
+        // One-shot correction regardless of any earlier residue: keep the last retention ids by
+        // insertion order (most recent last) and delete the rest. E2B only unlocks the
+        // templates after killSandbox, so this runs on shutdown.
+        try {
+            List<String> kept = platform.cleanupSnapshots(e2bState.getSnapshotIds(), retention);
+            e2bState.setSnapshotIds(kept);
+        } catch (Exception e) {
+            log.warn("[sandbox-e2b] snapshot cleanup best-effort skipped: {}", e.getMessage());
+        }
     }
 
     private static String snapshotName() {
