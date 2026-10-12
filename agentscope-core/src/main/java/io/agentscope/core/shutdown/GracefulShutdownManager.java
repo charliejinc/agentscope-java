@@ -358,5 +358,6 @@ public final class GracefulShutdownManager {
         shutdownStartedAt.set(null);
         monitorStarted.set(false);
         shutdownTimeoutSignal.set(Sinks.empty());
+        config.set(GracefulShutdownConfig.DEFAULT);
     }
 }
