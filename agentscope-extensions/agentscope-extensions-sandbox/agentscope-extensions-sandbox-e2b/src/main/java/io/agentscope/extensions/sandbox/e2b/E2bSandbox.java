@@ -101,7 +101,7 @@ public class E2bSandbox extends AbstractBaseSandbox {
     @Override
     protected InputStream doPersistWorkspace() throws Exception {
         if (e2bState.getPersistenceMode() == E2bPersistenceMode.NATIVE_SNAPSHOT) {
-            JsonNode snap = platform.createSandboxSnapshot(e2bState.getSandboxId());
+            JsonNode snap = platform.createSandboxSnapshot(e2bState.getSandboxId(), snapshotName());
             String id = snap.path("snapshotID").asText("");
             if (id.isBlank()) {
                 throw new SandboxException.SandboxRuntimeException(
@@ -319,6 +319,11 @@ public class E2bSandbox extends AbstractBaseSandbox {
             }
         }
         envd = null;
+    }
+
+    private static String snapshotName() {
+        String shortId = UUID.randomUUID().toString().replace("-", "").substring(0, 8);
+        return "agentscope-" + shortId + "-" + System.currentTimeMillis();
     }
 
     private E2bEnvdProcessClient envd() throws Exception {
