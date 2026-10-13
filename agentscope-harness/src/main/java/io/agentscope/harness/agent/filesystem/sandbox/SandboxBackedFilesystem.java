@@ -16,6 +16,7 @@
 package io.agentscope.harness.agent.filesystem.sandbox;
 
 import io.agentscope.core.agent.RuntimeContext;
+import io.agentscope.core.session.AtomicSessionStorage;
 import io.agentscope.harness.agent.filesystem.AbstractFilesystem;
 import io.agentscope.harness.agent.filesystem.model.ExecuteResponse;
 import io.agentscope.harness.agent.filesystem.model.FileDownloadResponse;
@@ -28,6 +29,7 @@ import io.agentscope.harness.agent.sandbox.SandboxException;
 import io.agentscope.harness.agent.sandbox.SandboxFileTransfer;
 import io.agentscope.harness.agent.sandbox.SandboxState;
 import io.agentscope.harness.agent.sandbox.WorkspaceSpec;
+import io.agentscope.harness.agent.session.SandboxSessionStorage;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
@@ -94,6 +96,17 @@ public class SandboxBackedFilesystem extends BaseSandboxFilesystem implements Sa
     @Override
     public String id() {
         return fsId;
+    }
+
+    @Override
+    public AtomicSessionStorage sessionStorage(RuntimeContext context) {
+        Sandbox active = requireSandbox(context);
+        try {
+            return new SandboxSessionStorage(active, resolveWorkspaceRoot(active));
+        } catch (IOException e) {
+            throw new RuntimeException(
+                    "Cannot resolve sandbox workspace root for session storage", e);
+        }
     }
 
     @Override
