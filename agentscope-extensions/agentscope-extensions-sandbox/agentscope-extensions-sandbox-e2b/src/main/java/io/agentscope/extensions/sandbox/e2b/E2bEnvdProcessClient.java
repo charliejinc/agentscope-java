@@ -619,9 +619,12 @@ final class E2bEnvdProcessClient {
         JsonNode valueNode = parent.path(jsonField);
         if (valueNode.isTextual()) {
             try {
+                // Use MIME decoder to handle base64 with line breaks (RFC 2045).
+                // E2B envd may return MIME-formatted base64 with newlines (0x0a),
+                // which the strict decoder (Base64.getDecoder()) rejects.
                 builder.setField(
                         field,
-                        ByteString.copyFrom(Base64.getDecoder().decode(valueNode.textValue())));
+                        ByteString.copyFrom(Base64.getMimeDecoder().decode(valueNode.textValue())));
             } catch (IllegalArgumentException ignored) {
                 // Malformed base64 from the server should not abort the stream.
             }
